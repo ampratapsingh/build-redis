@@ -25,6 +25,7 @@ CXX_BIN=/usr/bin/clang++;
 # Windows installs often have "python", not "python3".
 PY_BIN=python3; command -v python3 >/dev/null 2>&1 || PY_BIN=python
 
+
 compile() {
   case "$LANG_SLUG" in
     cpp)      "$CXX_BIN" -std=c++17 -isysroot "$(xcrun --show-sdk-path)" -O2 -o .prog "$ENTRY" ;;
