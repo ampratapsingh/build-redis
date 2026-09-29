@@ -20,14 +20,14 @@ case "$LANG_SLUG" in
 esac
 
 # Prefer gcc/g++ (Linux, MinGW on Windows) but fall back to cc/c++ (macOS).
-CC_BIN=cc;  command -v gcc >/dev/null 2>&1 && CC_BIN=gcc
-CXX_BIN=c++; command -v g++ >/dev/null 2>&1 && CXX_BIN=g++
+CC_BIN=/usr/bin/clang;  
+CXX_BIN=/usr/bin/clang++; 
 # Windows installs often have "python", not "python3".
 PY_BIN=python3; command -v python3 >/dev/null 2>&1 || PY_BIN=python
 
 compile() {
   case "$LANG_SLUG" in
-    c)        "$CC_BIN" -O2 -o .prog "$ENTRY" ;;
+    cpp)      "$CXX_BIN" -std=c++17 -isysroot "$(xcrun --show-sdk-path)" -O2 -o .prog "$ENTRY" ;;
     cpp)      "$CXX_BIN" -std=c++17 -O2 -o .prog "$ENTRY" ;;
     rust)     rustc -O -o .prog "$ENTRY" ;;
     java)     javac "$ENTRY" ;;

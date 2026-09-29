@@ -35,6 +35,15 @@ string handleCommand(const vector<string>& args) {
     if (cmd == "PING") {
         // TODO: Return "+PONG\r\n" for no args
         // TODO: Return bulk string for PING <message>
+         if (cmd == "PING"){
+            if(args.size() == 1){
+                return "+PONG\r\n";
+            } else if(args.size() == 2){
+                return encodeBulkString(args[1]);
+            } else{
+                return "-ERR wrong number of arguments for 'ping' command\r\n";
+            }
+        }
     }
 
     return "-ERR unknown command\r\n";
