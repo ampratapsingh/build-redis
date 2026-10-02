@@ -17,6 +17,8 @@ struct ZSet { unordered_map<string,double> scores; vector<pair<double,string>> s
 unordered_map<string,ZSet> zsets;
 unordered_map<string,string> keyType;
 long long clockMs = 0;
+bool inMulti = false;
+vector<vector<string>> txQueue;
 
 string eb(const string& s){return "$"+to_string(s.size())+"\r\n"+s+"\r\n";}
 string ebnull(){return "$-1\r\n";}
@@ -53,11 +55,9 @@ void zsetRebuild(ZSet& zs){
 }
 string dblToStr(double d){return to_string((long long)d);}
 
-void deleteKey(const string& key) {
-    store.erase(key); expiry.erase(key); lists.erase(key); hashes.erase(key); sets.erase(key); zsets.erase(key); keyType.erase(key);
-}
+void deleteKey(const string& key){store.erase(key);expiry.erase(key);lists.erase(key);hashes.erase(key);sets.erase(key);zsets.erase(key);keyType.erase(key);}
 
-string handle(const vector<string>& args) {
+string execCmd(const vector<string>& args) {
     string cmd = toUpper(args[0]);
     if(cmd=="WAIT"){clockMs+=stoll(args[1]);return es("OK");}
     if(cmd=="PING"){if(args.size()>2)return ee("ERR wrong number of arguments for 'PING' command");if(args.size()==1)return es("PONG");return eb(args[1]);}
@@ -105,106 +105,101 @@ string handle(const vector<string>& args) {
     if(cmd=="SISMEMBER"){string k=args[1];cleanIfExpired(k);if(!sets.count(k)||!sets[k].count(args[2]))return ei(0);return ei(1);}
     if(cmd=="SCARD"){string k=args[1];cleanIfExpired(k);if(!sets.count(k))return ei(0);return ei((int)sets[k].size());}
     if(cmd=="SREM"){string k=args[1];cleanIfExpired(k);if(!sets.count(k))return ei(0);int c=0;for(size_t i=2;i<args.size();i++){if(sets[k].erase(args[i]))c++;}removeKeyIfEmpty(k);return ei(c);}
-    if(cmd=="ZADD"){
-        string k=args[1];cleanIfExpired(k);string t=checkType(k,"zset");if(!t.empty())return t;
-        if(!zsets.count(k))zsets[k]=ZSet();int added=0;
-        for(size_t i=2;i+1<args.size();i+=2){double sc=stod(args[i]);string mem=args[i+1];if(!zsets[k].scores.count(mem))added++;zsets[k].scores[mem]=sc;}
-        zsetRebuild(zsets[k]);keyType[k]="zset";return ei(added);
-    }
+    if(cmd=="ZADD"){string k=args[1];cleanIfExpired(k);string t=checkType(k,"zset");if(!t.empty())return t;if(!zsets.count(k))zsets[k]=ZSet();int added=0;for(size_t i=2;i+1<args.size();i+=2){double sc=stod(args[i]);string mem=args[i+1];if(!zsets[k].scores.count(mem))added++;zsets[k].scores[mem]=sc;}zsetRebuild(zsets[k]);keyType[k]="zset";return ei(added);}
     if(cmd=="ZSCORE"){string k=args[1];cleanIfExpired(k);if(!zsets.count(k)||!zsets[k].scores.count(args[2]))return ebnull();return eb(dblToStr(zsets[k].scores[args[2]]));}
     if(cmd=="ZRANGE"){
         string k=args[1];cleanIfExpired(k);if(!zsets.count(k))return "*0\r\n";
         auto&zs=zsets[k];int len=(int)zs.sorted.size();int start=stoi(args[2]),stop=stoi(args[3]);
-        bool withScores=args.size()>4&&toUpper(args[4])=="WITHSCORES";
+        bool ws=args.size()>4&&toUpper(args[4])=="WITHSCORES";
         if(start<0)start+=len;if(stop<0)stop+=len;if(start<0)start=0;if(stop>=len)stop=len-1;
-        if(start>stop)return "*0\r\n";
-        vector<string>res;for(int i=start;i<=stop;i++){res.push_back(zs.sorted[i].second);if(withScores)res.push_back(dblToStr(zs.sorted[i].first));}
-        return ea(res);
+        if(start>stop)return "*0\r\n";vector<string>res;for(int i=start;i<=stop;i++){res.push_back(zs.sorted[i].second);if(ws)res.push_back(dblToStr(zs.sorted[i].first));}return ea(res);
     }
     if(cmd=="ZRANK"){string k=args[1];cleanIfExpired(k);if(!zsets.count(k)||!zsets[k].scores.count(args[2]))return ebnull();auto&zs=zsets[k];for(int i=0;i<(int)zs.sorted.size();i++){if(zs.sorted[i].second==args[2])return ei(i);}return ebnull();}
     if(cmd=="ZCARD"){string k=args[1];cleanIfExpired(k);if(!zsets.count(k))return ei(0);return ei((int)zsets[k].scores.size());}
-
-    // TODO: Implement DEL key [key ...]
-    //   - Delete each key (use deleteKey helper), count how many existed
-    //   - Return ei(count)
-
-    // TODO: Implement KEYS *
-    //   - Return all non-expired keys as RESP array (sorted alphabetically)
-    //   - Only the "*" pattern is required
-
-    // TODO: Implement TYPE key
-    //   - Return "+string\r\n", "+list\r\n", "+hash\r\n", "+set\r\n", "+zset\r\n", or "+none\r\n"
-    //   - Use es(keyType[key]) if key exists, es("none") otherwise
-
-    // TODO: Implement RENAME key newkey
-    //   - If source key doesn't exist -> ee("ERR no such key")
-    //   - Move all data from old key to new key (delete new key first if it exists)
-    //   - Return es("OK")
-    if(cmd=="DEL"){
-        int count = 0;
-        for(size_t i = 1; i < args.size(); i++){
-            if(keyExists(args[i])){
-                deleteKey(args[i]);
-                count++;
-            }
-        }
-        return ei(count);
-    }
-
-    // KEYS *
+    if(cmd=="DEL"){int c=0;for(size_t i=1;i<args.size();i++){if(keyExists(args[i])){deleteKey(args[i]);c++;}}return ei(c);}
     if(cmd=="KEYS"){
-        if(args.size() < 2 || args[1] != "*") return ea({});
-        vector<string> activeKeys;
-        vector<string> expiredKeys;
-        for(const auto& p : keyType){
-            if(isExpired(p.first)){
-                expiredKeys.push_back(p.first);
-            } else {
-                activeKeys.push_back(p.first);
-            }
-        }
-        for(const auto& k : expiredKeys) deleteKey(k);
-        sort(activeKeys.begin(), activeKeys.end());
-        return ea(activeKeys);
+        vector<string>res;for(auto&p:keyType){cleanIfExpired(p.first);if(keyType.count(p.first))res.push_back(p.first);}
+        sort(res.begin(),res.end());return ea(res);
     }
-
-    // TYPE key
     if(cmd=="TYPE"){
-        if(args.size() < 2) return ee("ERR wrong number of arguments for 'TYPE' command");
-        if(keyExists(args[1])){
-            return es(keyType[args[1]]);
-        }
-        return es("none");
+        string k=args[1];cleanIfExpired(k);
+        if(!keyType.count(k))return es("none");
+        return es(keyType[k]);
     }
-
-    // RENAME key newkey
     if(cmd=="RENAME"){
-        if(args.size() != 3) return ee("ERR wrong number of arguments for 'RENAME' command");
-        string src = args[1], dst = args[2];
-        if(!keyExists(src)) return ee("ERR no such key");
-        if(src == dst) return es("OK");
+        string src=args[1],dst=args[2];cleanIfExpired(src);
+        if(!keyType.count(src))return ee("ERR no such key");
+        if(src==dst)return es("OK");
+        deleteKey(dst);
+        string tp=keyType[src];
+        if(tp=="string"){store[dst]=store[src];store.erase(src);}
+        else if(tp=="list"){lists[dst]=lists[src];lists.erase(src);}
+        else if(tp=="hash"){hashes[dst]=hashes[src];hashes.erase(src);}
+        else if(tp=="set"){sets[dst]=sets[src];sets.erase(src);}
+        else if(tp=="zset"){zsets[dst]=zsets[src];zsets.erase(src);}
+        keyType[dst]=tp;keyType.erase(src);
+        if(expiry.count(src)){expiry[dst]=expiry[src];expiry.erase(src);}
+        return es("OK");
+    }
+    return ee("ERR unknown command '" + args[0] + "'");
+}
 
-        deleteKey(dst); // Delete destination first if it already exists
 
-        string t = keyType[src];
-        if(t == "string") { store[dst] = std::move(store[src]); }
-        else if(t == "list") { lists[dst] = std::move(lists[src]); }
-        else if(t == "hash") { hashes[dst] = std::move(hashes[src]); }
-        else if(t == "set") { sets[dst] = std::move(sets[src]); }
-        else if(t == "zset") { zsets[dst] = std::move(zsets[src]); }
+string handle(const vector<string>& args) {
+    if (args.empty()) return "";
+    string cmd = toUpper(args[0]);
 
-        keyType[dst] = t;
-
-        auto it = expiry.find(src);
-        if(it != expiry.end()){
-            expiry[dst] = it->second;
+    // MULTI
+    if (cmd == "MULTI") {
+        if (inMulti) {
+            return ee("ERR MULTI calls can not be nested");
         }
 
-        deleteKey(src);
+        inMulti = true;
+        txQueue.clear();
+
         return es("OK");
     }
 
-    return ee("ERR unknown command '" + args[0] + "'");
+    // EXEC
+    if (cmd == "EXEC") {
+        if (!inMulti) {
+            return ee("ERR EXEC without MULTI");
+        }
+
+        // Copy and clear the queue first to avoid state issues during execution
+        vector<vector<string>> queueToRun = std::move(txQueue);
+        txQueue.clear();
+        inMulti = false;
+
+        string res = "*" + to_string(queueToRun.size()) + "\r\n";
+
+        for (const auto& queuedArgs : queueToRun) {
+            res += execCmd(queuedArgs);
+        }
+
+        return res;
+    }
+
+    // DISCARD
+    if (cmd == "DISCARD") {
+        if (!inMulti) {
+            return ee("ERR DISCARD without MULTI");
+        }
+
+        inMulti = false;
+        txQueue.clear();
+
+        return es("OK");
+    }
+
+    // Intercept and buffer commands when inside MULTI
+    if (inMulti) {
+        txQueue.push_back(args);
+        return es("QUEUED");
+    }
+
+    return execCmd(args);
 }
 
 int main() {
